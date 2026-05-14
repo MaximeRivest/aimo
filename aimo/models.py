@@ -17,8 +17,8 @@ class AIMOModel(str):
     Use ``repr(model)`` or ``model.pretty()`` for a human-readable metadata summary.
     """
 
-    def __new__(cls, model_id: str, **metadata: Any) -> "AIMOModel":
-        obj = super().__new__(cls, model_id)
+    def __new__(cls, value: str, **metadata: Any) -> "AIMOModel":
+        obj = super().__new__(cls, value)
 
         for key, value in metadata.items():
             # Keep string semantics and read-only properties intact. Provider metadata can
@@ -151,10 +151,10 @@ class AIMORegistry(AIMONamespace):
         self._ensure_loaded()
         q = query.lower()
         matches: List[AIMOModel] = []
-        for model_id, model in self._models_by_id.items():
+        for registry_key, model in self._models_by_id.items():
             if provider and str(getattr(model, "provider", "")).lower() != provider.lower():
                 continue
-            if q and q not in model_id.lower():
+            if q and q not in registry_key.lower() and q not in model.id.lower():
                 continue
             matches.append(model)
             if len(matches) >= limit:
@@ -216,7 +216,9 @@ def _unique_attr(namespace: AIMONamespace, preferred: str, model_id: str) -> str
 
 
 def _model_metadata(model_id: str, info: Dict[str, Any]) -> Dict[str, Any]:
+    actual_model_id = str(info.get("model_id") or info.get("id") or model_id)
     metadata = dict(info)
+    metadata.setdefault("model_id", actual_model_id)
     metadata.setdefault("provider", info.get("provider", "unknown"))
     metadata.setdefault("context", info.get("context_window") or info.get("max_input_tokens"))
     metadata.setdefault("input_price", info.get("input_cost_per_token"))
@@ -224,7 +226,7 @@ def _model_metadata(model_id: str, info: Dict[str, Any]) -> Dict[str, Any]:
     metadata.setdefault("supports_vision", bool(info.get("supports_vision", False)))
     metadata.setdefault("supports_function_calling", bool(info.get("supports_function_calling", False)))
     metadata.setdefault("capabilities", info.get("capabilities", []))
-    metadata["id"] = model_id
+    metadata["id"] = actual_model_id
     return metadata
 
 
@@ -255,11 +257,12 @@ def _leaf_name(provider: str, model_id: str) -> str:
 
 
 def _populate_registry(root: AIMORegistry, data: Dict[str, Dict[str, Any]]) -> None:
-    for model_id, info in data.items():
+    for registry_key, info in data.items():
+        model_id = str(info.get("model_id") or info.get("id") or registry_key)
         provider = str(info.get("provider", "unknown"))
-        model = AIMOModel(model_id, **_model_metadata(model_id, info))
-        root._models_by_id[model_id] = model
-        target = _target_namespace(root, provider, model_id)
+        model = AIMOModel(model_id, **_model_metadata(registry_key, info))
+        root._models_by_id[registry_key] = model
+        target = _target_namespace(root, provider, registry_key)
         leaf = _unique_attr(target, _leaf_name(provider, model_id), model_id)
         setattr(target, leaf, model)
 

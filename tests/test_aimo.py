@@ -144,3 +144,60 @@ def test_models_dev_failure_falls_back_to_litellm(monkeypatch):
 
     assert merged["gpt-4o"]["provider"] == "openai"
     assert merged["gpt-4o"]["context_window"] == 128000
+
+
+def test_models_dev_provider_keyed_shape_is_parsed_with_limits_cost_and_provider_metadata():
+    from aimo.data import _merge_data
+
+    merged = _merge_data(
+        {},
+        {
+            "anthropic": {
+                "id": "anthropic",
+                "name": "Anthropic",
+                "api": "https://api.anthropic.com/v1",
+                "models": {
+                    "claude-3-5-sonnet-20240620": {
+                        "id": "claude-3-5-sonnet-20240620",
+                        "name": "Claude 3.5 Sonnet",
+                        "attachment": True,
+                        "reasoning": False,
+                        "tool_call": True,
+                        "temperature": True,
+                        "release_date": "2024-06-20",
+                        "modalities": {"input": ["text", "image"], "output": ["text"]},
+                        "limit": {"context": 200000, "output": 8192},
+                        "cost": {"input": 3, "output": 15},
+                    }
+                },
+            }
+        },
+    )
+
+    model = merged["claude-3-5-sonnet-20240620"]
+    assert model["model_id"] == "claude-3-5-sonnet-20240620"
+    assert model["provider"] == "anthropic"
+    assert model["provider_name"] == "Anthropic"
+    assert model["provider_logo"] == "https://models.dev/logos/anthropic.svg"
+    assert model["context_window"] == 200000
+    assert model["max_output_tokens"] == 8192
+    assert model["input_cost_per_token"] == 0.000003
+    assert model["output_cost_per_token"] == 0.000015
+    assert "vision" in model["capabilities"]
+    assert "function_calling" in model["capabilities"]
+
+
+def test_models_dev_duplicate_model_ids_do_not_clobber_other_providers():
+    from aimo.data import _merge_data
+
+    merged = _merge_data(
+        {},
+        {
+            "provider-a": {"models": {"same-id": {"id": "same-id", "limit": {"context": 1}}}},
+            "provider-b": {"models": {"same-id": {"id": "same-id", "limit": {"context": 2}}}},
+        },
+    )
+
+    assert merged["same-id"]["provider"] == "provider-a"
+    assert merged["provider-b/same-id"]["provider"] == "provider-b"
+    assert merged["provider-b/same-id"]["model_id"] == "same-id"
