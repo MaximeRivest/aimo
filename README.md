@@ -17,7 +17,7 @@ Combines metadata from [LiteLLM](https://github.com/BerriAI/litellm) and [models
 ## Installation
 
 ```bash
-pip install aimo
+pip install aimo-registry
 ```
 
 ## Usage

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "aimo"
+name = "aimo-registry"
 version = "0.1.0"
 description = "Smart AI model registry with hierarchical access and rich metadata"
 readme = "README.md"

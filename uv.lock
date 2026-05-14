@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "aimo"
+name = "aimo-registry"
 version = "0.1.0"
 source = { editable = "." }
 
