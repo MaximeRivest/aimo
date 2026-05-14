@@ -1,0 +1,182 @@
+"""
+Data loading and merging logic for aimo.
+
+Combines:
+- LiteLLM model_prices_and_context_window.json
+- models.dev API (https://models.dev/api.json)
+
+Network access is deliberately opt-in at package import time. Public callers load data lazily,
+and ``update()`` can force a refresh.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, Iterable, Iterator, Mapping
+from urllib.request import urlopen
+
+LITELLM_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+MODELS_DEV_URL = "https://models.dev/api.json"
+
+CACHE_DIR = Path(os.environ.get("AIMO_CACHE_DIR", Path.home() / ".cache" / "aimo"))
+LITELLM_CACHE = CACHE_DIR / "litellm_models.json"
+MODELS_DEV_CACHE = CACHE_DIR / "models_dev.json"
+
+
+class AIMODataError(RuntimeError):
+    """Raised when model metadata cannot be loaded."""
+
+
+def _read_json(path: Path) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _write_json(path: Path, data: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+    tmp.replace(path)
+
+
+def _download(url: str, cache_path: Path, *, force: bool = False, allow_network: bool = True) -> Dict[str, Any]:
+    """Load JSON from cache, optionally refreshing it from the network."""
+    if cache_path.exists() and not force:
+        return _read_json(cache_path)
+
+    if not allow_network:
+        raise AIMODataError(
+            f"No cached data at {cache_path}. Run `python -c 'import aimo; aimo.update()'` "
+            "while online to populate the cache."
+        )
+
+    with urlopen(url, timeout=20) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    _write_json(cache_path, data)
+    return data
+
+
+def _first_present(mapping: Mapping[str, Any], keys: Iterable[str]) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _normalise_price(pricing: Any, names: Iterable[str]) -> Any:
+    if not isinstance(pricing, Mapping):
+        return None
+    return _first_present(pricing, names)
+
+
+def _iter_models_dev_models(payload: Mapping[str, Any]) -> Iterator[Dict[str, Any]]:
+    """Yield model dictionaries from known models.dev API shapes.
+
+    Historically examples of this API have appeared both as ``{"models": [...]}`` and
+    as provider-keyed maps. This reader accepts both and annotates provider-keyed entries
+    with their provider when the entry omits it.
+    """
+    top_models = payload.get("models")
+    if isinstance(top_models, list):
+        for item in top_models:
+            if isinstance(item, Mapping):
+                yield dict(item)
+        return
+    if isinstance(top_models, Mapping):
+        for model_id, item in top_models.items():
+            if isinstance(item, Mapping):
+                model = dict(item)
+                model.setdefault("id", model_id)
+                yield model
+        return
+
+    for provider_name, provider_data in payload.items():
+        if not isinstance(provider_data, Mapping):
+            continue
+        models = provider_data.get("models")
+        if isinstance(models, list):
+            for item in models:
+                if isinstance(item, Mapping):
+                    model = dict(item)
+                    model.setdefault("provider", provider_name)
+                    yield model
+        elif isinstance(models, Mapping):
+            for model_id, item in models.items():
+                if isinstance(item, Mapping):
+                    model = dict(item)
+                    model.setdefault("id", model_id)
+                    model.setdefault("provider", provider_name)
+                    yield model
+
+
+def _merge_data(litellm: Dict[str, Any], models_dev: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Merge LiteLLM and models.dev data into ``model_id -> metadata``."""
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    for model_id, raw_info in litellm.items():
+        if model_id == "sample_spec" or not isinstance(raw_info, Mapping):
+            continue
+        info = dict(raw_info)
+        provider = info.get("litellm_provider") or info.get("provider") or "unknown"
+        merged[model_id] = {
+            **info,
+            "provider": provider,
+            "context_window": _first_present(info, ["max_input_tokens", "max_tokens", "context_window"]),
+            "input_cost_per_token": info.get("input_cost_per_token"),
+            "output_cost_per_token": info.get("output_cost_per_token"),
+            "supports_vision": bool(info.get("supports_vision", False)),
+            "supports_function_calling": bool(info.get("supports_function_calling", False)),
+            "supports_prompt_caching": bool(info.get("supports_prompt_caching", False)),
+            "source": "litellm",
+        }
+
+    for model in _iter_models_dev_models(models_dev):
+        model_id = model.get("id") or model.get("name")
+        if not model_id:
+            continue
+        pricing = model.get("pricing")
+        normalised = {
+            **model,
+            "provider": model.get("provider") or model.get("provider_id") or "unknown",
+            "context_window": _first_present(model, ["context_window", "context", "max_tokens", "limit"]),
+            "input_cost_per_token": _normalise_price(pricing, ["input", "input_cost_per_token", "prompt"]),
+            "output_cost_per_token": _normalise_price(pricing, ["output", "output_cost_per_token", "completion"]),
+            "capabilities": model.get("capabilities", []),
+            "modalities": model.get("modalities", []),
+            "release_date": model.get("release_date") or model.get("released") or model.get("releaseDate"),
+        }
+        if model_id in merged:
+            # Preserve LiteLLM's pricing/provider fields unless models.dev adds previously missing data.
+            existing = merged[model_id]
+            for key, value in normalised.items():
+                if value not in (None, [], {}) or key not in existing:
+                    existing.setdefault(key, value)
+            existing.update(
+                {
+                    "capabilities": normalised.get("capabilities", existing.get("capabilities", [])),
+                    "modalities": normalised.get("modalities", existing.get("modalities", [])),
+                    "release_date": normalised.get("release_date", existing.get("release_date")),
+                    "source": "merged",
+                }
+            )
+        else:
+            normalised["source"] = "models.dev"
+            merged[str(model_id)] = normalised
+
+    return merged
+
+
+def get_merged_model_data(*, force_refresh: bool = False, allow_network: bool = True) -> Dict[str, Dict[str, Any]]:
+    """Return merged model data.
+
+    ``force_refresh=True`` refreshes both upstream files. ``allow_network=False`` makes the
+    function deterministic/offline-only and raises ``AIMODataError`` if cache files are absent.
+    """
+    litellm_data = _download(LITELLM_URL, LITELLM_CACHE, force=force_refresh, allow_network=allow_network)
+    models_dev_data = _download(MODELS_DEV_URL, MODELS_DEV_CACHE, force=force_refresh, allow_network=allow_network)
+    return _merge_data(litellm_data, models_dev_data)
