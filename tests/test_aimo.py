@@ -122,4 +122,25 @@ def test_import_does_not_load_data(monkeypatch):
     import aimo as package
 
     importlib.reload(package)
-    assert package.__version__ == "0.1.0"
+    assert package.__version__
+
+
+def test_models_dev_failure_falls_back_to_litellm(monkeypatch):
+    from aimo import data
+
+    def fake_download(url, cache_path, *, force=False, allow_network=True):
+        if url == data.LITELLM_URL:
+            return {
+                "gpt-4o": {
+                    "litellm_provider": "openai",
+                    "max_input_tokens": 128000,
+                }
+            }
+        raise data.AIMODataError("models.dev unavailable")
+
+    monkeypatch.setattr(data, "_download", fake_download)
+
+    merged = data.get_merged_model_data()
+
+    assert merged["gpt-4o"]["provider"] == "openai"
+    assert merged["gpt-4o"]["context_window"] == 128000

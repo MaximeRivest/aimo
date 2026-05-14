@@ -15,7 +15,8 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, Mapping
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 LITELLM_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 MODELS_DEV_URL = "https://models.dev/api.json"
@@ -43,7 +44,12 @@ def _write_json(path: Path, data: Mapping[str, Any]) -> None:
 
 
 def _download(url: str, cache_path: Path, *, force: bool = False, allow_network: bool = True) -> Dict[str, Any]:
-    """Load JSON from cache, optionally refreshing it from the network."""
+    """Load JSON from cache, optionally refreshing it from the network.
+
+    If a forced refresh fails but stale cache exists, the stale cache is returned. That makes
+    ``aimo.update()`` resilient to transient upstream failures while still surfacing a clear
+    error when no usable data exists.
+    """
     if cache_path.exists() and not force:
         return _read_json(cache_path)
 
@@ -53,8 +59,14 @@ def _download(url: str, cache_path: Path, *, force: bool = False, allow_network:
             "while online to populate the cache."
         )
 
-    with urlopen(url, timeout=20) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    request = Request(url, headers={"User-Agent": "aimo-registry/0.1 (+https://github.com/MaximeRivest/aimo)"})
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        if cache_path.exists():
+            return _read_json(cache_path)
+        raise AIMODataError(f"Could not load model metadata from {url}: {exc}") from exc
 
     _write_json(cache_path, data)
     return data
@@ -174,9 +186,15 @@ def _merge_data(litellm: Dict[str, Any], models_dev: Dict[str, Any]) -> Dict[str
 def get_merged_model_data(*, force_refresh: bool = False, allow_network: bool = True) -> Dict[str, Dict[str, Any]]:
     """Return merged model data.
 
-    ``force_refresh=True`` refreshes both upstream files. ``allow_network=False`` makes the
-    function deterministic/offline-only and raises ``AIMODataError`` if cache files are absent.
+    LiteLLM is the required primary source. models.dev is optional enrichment: if it is
+    unavailable and no models.dev cache exists, aimo still works with LiteLLM metadata.
+    ``force_refresh=True`` refreshes upstream files. ``allow_network=False`` is
+    deterministic/offline-only and raises ``AIMODataError`` if the required LiteLLM cache is
+    absent.
     """
     litellm_data = _download(LITELLM_URL, LITELLM_CACHE, force=force_refresh, allow_network=allow_network)
-    models_dev_data = _download(MODELS_DEV_URL, MODELS_DEV_CACHE, force=force_refresh, allow_network=allow_network)
+    try:
+        models_dev_data = _download(MODELS_DEV_URL, MODELS_DEV_CACHE, force=force_refresh, allow_network=allow_network)
+    except AIMODataError:
+        models_dev_data = {}
     return _merge_data(litellm_data, models_dev_data)
