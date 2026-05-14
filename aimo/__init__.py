@@ -13,7 +13,7 @@ from typing import Any, List
 
 from .models import AIMOModel, AIMORegistry, aimo, search, update
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 __all__ = ["aimo", "AIMOModel", "AIMORegistry", "update", "search"]
 
 

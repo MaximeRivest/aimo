@@ -201,3 +201,15 @@ def test_models_dev_duplicate_model_ids_do_not_clobber_other_providers():
     assert merged["same-id"]["provider"] == "provider-a"
     assert merged["provider-b/same-id"]["provider"] == "provider-b"
     assert merged["provider-b/same-id"]["model_id"] == "same-id"
+
+
+def test_lsp_stub_exposes_module_and_registry_attributes():
+    from pathlib import Path
+
+    stub = Path("aimo/__init__.pyi").read_text()
+
+    assert "openai: _Openai" in stub
+    assert "class _Openai:" in stub
+    assert "gpt_4o: AIMOModel" in stub
+    assert "class AIMORegistry:" in stub
+    assert "    openai: _Openai" in stub

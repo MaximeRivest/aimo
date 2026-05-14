@@ -140,7 +140,7 @@ def _iter_models_dev_models(payload: Mapping[str, Any]) -> Iterator[Dict[str, An
             for item in models:
                 if isinstance(item, Mapping):
                     model = dict(item)
-                    model.setdefault("provider", provider_id)
+                    model["provider"] = provider_id
                     model.update({k: v for k, v in models_dev_provider.items() if v is not None})
                     yield model
         elif isinstance(models, Mapping):
@@ -148,7 +148,7 @@ def _iter_models_dev_models(payload: Mapping[str, Any]) -> Iterator[Dict[str, An
                 if isinstance(item, Mapping):
                     model = dict(item)
                     model.setdefault("id", model_id)
-                    model.setdefault("provider", provider_id)
+                    model["provider"] = provider_id
                     model.update({k: v for k, v in models_dev_provider.items() if v is not None})
                     yield model
 

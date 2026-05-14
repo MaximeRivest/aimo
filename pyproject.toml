@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aimo-registry"
-version = "0.1.2"
+version = "0.1.3"
 description = "Smart AI model registry with hierarchical access and rich metadata"
 readme = "README.md"
 license = {file = "LICENSE"}

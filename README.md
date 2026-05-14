@@ -13,6 +13,7 @@ Combines metadata from [LiteLLM](https://github.com/BerriAI/litellm) and [models
 - 📊 Metadata: context window, pricing, capabilities, vision support, and upstream raw fields
 - 🔄 Explicit cache refresh from LiteLLM + models.dev via `aimo.update()`
 - 🚀 Zero runtime dependencies; lazy startup with local caching
+- 🧩 Static `.pyi` stubs for LSP autocomplete of common `aimo.openai.gpt_4o` paths
 
 ## Installation
 
